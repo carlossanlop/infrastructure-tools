@@ -6,7 +6,7 @@ using System.Net.Http.Headers;
 using System.Threading.Tasks;
 
 // Some of this code was obtained from Azure-Samples/active-directory-dotnetcore-devicecodeflow-v2
-namespace ServicingTools.Authentication.MicrosoftGraph;
+namespace InfrastructureTools.Authentication.MicrosoftGraph;
 
 /// <summary>
 /// Allows executing Microsoft Graph queries.

@@ -4,7 +4,7 @@ using System.IO;
 using System.Reflection;
 using System.Threading.Tasks;
 
-namespace ServicingTools.Authentication.GitHub;
+namespace InfrastructureTools.Authentication.GitHub;
 
 /// <summary>
 /// Allows authentication to GitHub and creates an object that allows executing GitHub queries.

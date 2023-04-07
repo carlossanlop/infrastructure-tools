@@ -85,7 +85,7 @@ public class MicrosoftGraphAuthenticator
     /// <summary>
     /// Authenticates to Microsoft Graph using the information specified in the constructor.
     /// </summary>
-    /// <returns>An <see cref="MicrosoftGraphCommunicator"/> instance that can be used to execute Microsoft Graph queries.</returns>
+    /// <returns>A <see cref="MicrosoftGraphCommunicator"/> instance that can be used to execute Microsoft Graph queries.</returns>
     /// <exception cref="UnauthorizedAccessException">Authentication failed.</exception>
     public async Task<MicrosoftGraphCommunicator> AuthenticateAsync()
     {

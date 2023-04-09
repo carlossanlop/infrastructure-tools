@@ -6,12 +6,12 @@ using System.Net.Http.Headers;
 using System.Threading.Tasks;
 
 // Some of this code was obtained from Azure-Samples/active-directory-dotnetcore-devicecodeflow-v2
-namespace InfrastructureTools.Authentication.MicrosoftGraph;
+namespace InfrastructureTools.Connectors.MicrosoftGraph;
 
 /// <summary>
 /// Allows executing Microsoft Graph queries.
 /// </summary>
-public class MicrosoftGraphCommunicator
+public class MicrosoftGraphCommunicator : IDisposable
 {
     private const string JsonMediaType = "application/json";
 
@@ -38,6 +38,11 @@ public class MicrosoftGraphCommunicator
         }
         _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("bearer", _authResult.AccessToken);
     }
+
+    /// <summary>
+    /// Releases unmanaged resources.
+    /// </summary>
+    public void Dispose() => _httpClient.Dispose();
 
     /// <summary>
     /// Executes a Graph API query.

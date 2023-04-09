@@ -3,9 +3,13 @@ Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.6.33513.286
 MinimumVisualStudioVersion = 10.0.40219.1
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MicrosoftGraph", "src\Authentication\MicrosoftGraph\MicrosoftGraph.csproj", "{E7BD9F58-2807-4A8E-88A5-6DD0209D1AFB}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "MicrosoftGraph", "src\Connectors\MicrosoftGraph\MicrosoftGraph.csproj", "{E7BD9F58-2807-4A8E-88A5-6DD0209D1AFB}"
 EndProject
-Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GitHub", "src\Authentication\GitHub\GitHub.csproj", "{345E5C25-8C0D-41D4-8D7B-9E47B0E3A4E6}"
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "GitHub", "src\Connectors\GitHub\GitHub.csproj", "{345E5C25-8C0D-41D4-8D7B-9E47B0E3A4E6}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Connectors", "Connectors", "{E4E45EA9-0A6A-4906-AA64-EC989258CBEB}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{4590EF4E-5022-4392-BC52-4FB5AE2C2E4E}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -24,6 +28,11 @@ Global
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{E7BD9F58-2807-4A8E-88A5-6DD0209D1AFB} = {E4E45EA9-0A6A-4906-AA64-EC989258CBEB}
+		{345E5C25-8C0D-41D4-8D7B-9E47B0E3A4E6} = {E4E45EA9-0A6A-4906-AA64-EC989258CBEB}
+		{E4E45EA9-0A6A-4906-AA64-EC989258CBEB} = {4590EF4E-5022-4392-BC52-4FB5AE2C2E4E}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {BFCF519E-6A71-41F1-84D2-30E9E8D27F00}

@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 using System.Linq;
 
 // Some of this code was obtained from Azure-Samples/active-directory-dotnetcore-devicecodeflow-v2
-namespace InfrastructureTools.Authentication.MicrosoftGraph;
+namespace InfrastructureTools.Connectors.MicrosoftGraph;
 
 /// <summary>
 /// Allows authenticating to Microsoft Graph and creates an object that allows executing Graph queries.

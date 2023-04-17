@@ -1,4 +1,5 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Collections.Generic;
+using System.Threading.Tasks;
 
 namespace InfrastructureTools.Connectors.AzureDevOps;
 
@@ -6,31 +7,17 @@ public class Artifact
 {
     public Artifact() { }
 
-    [JsonPropertyName("id")]
     public int Id { get;set; }
-
-    [JsonPropertyName("name")]
     public string Name { get;set; } = string.Empty;
-
-    [JsonPropertyName("source")]
     public string Source { get;set; } = string.Empty;
-
-    [JsonPropertyName("resource")]
-    public ArtifactResource? Resource { get; set; }
+    public ArtifactResource? Resource { get; set; } = new();
 
     public override string ToString()
     {
         return @$"ID: {Id}
 Name: {Name}
 Source: {Source}
-Resource:
-    Type: {Resource?.Type}
-    Data: {Resource?.Data}
-    Properties:
-        LocalPath: {Resource?.Properties?.LocalPath}
-        ArtifactSize: {Resource?.Properties?.ArtifactSize}
-    Url: {Resource?.Url}
-    DownloadUrl: {Resource?.DownloadUrl}
+Resource: {Resource}
 ";
     }
 }
@@ -39,29 +26,50 @@ public class ArtifactResource
 {
     public ArtifactResource() { }
 
-    [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
-
-    [JsonPropertyName("data")]
     public string Data { get; set; } = string.Empty;
-
-    [JsonPropertyName("url")]
     public string Url { get; set; } = string.Empty;
-
-    [JsonPropertyName("downloadUrl")]
     public string DownloadUrl { get; set; } = string.Empty;
+    public ArtifactResourceProperties? Properties { get; set; } = new();
 
-    [JsonPropertyName("properties")]
-    public ArtifactResourceProperties? Properties { get; set; }
+    public override string ToString()
+    {
+        return @$"
+    Type: {Type}
+    Data: {Data}
+    Url: {Url}
+    DownloadUrl: {DownloadUrl}
+    Properties: {Properties}";
+    }
 }
 
 public class ArtifactResourceProperties
 {
     public ArtifactResourceProperties() { }
 
-    [JsonPropertyName("localpath")]
     public string LocalPath { get; set; } = string.Empty;
-
-    [JsonPropertyName("artifactsize")]
+    public string RootId { get; set; } = string.Empty;
     public string ArtifactSize { get; set; } = string.Empty;
+
+    public override string ToString()
+    {
+        return $@"
+        LocalPath: {LocalPath}
+        RootId: {RootId}
+        ArtifactSize: {ArtifactSize}";
+    }
 }
+
+/*
+All:
+    build/builds/{buildId}/artifacts
+Single:
+    build/builds/{buildId}/artifacts?artifactName={artifactName}
+*/
+public class ArtifactsOptions
+{
+    public int BuildNumber { get; set; }
+    public string? ArtifactName { get; set; }
+    public Dictionary<string, string> Arguments { get; set; } = new Dictionary<string, string>();
+}
+

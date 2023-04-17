@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Collections.Generic;
 
 namespace InfrastructureTools.Connectors.AzureDevOps;
 
@@ -6,19 +6,14 @@ public class Pipeline
 {
     public Pipeline() { }
 
-    [JsonPropertyName("id")]
     public int Id { get; set; }
 
-    [JsonPropertyName("url")]
     public string Url { get; set; } = string.Empty;
 
-    [JsonPropertyName("revision")]
     public int Revision { get; set; }
 
-    [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
 
-    [JsonPropertyName("folder")]
     public string Folder { get; set; } = string.Empty;
 
     public override string ToString()
@@ -30,4 +25,19 @@ URL: {Url}
 Revision: {Revision}
 ";
     }
+}
+
+/*
+All:
+    pipelines?
+        orderBy={orderBy}&$top={$top}&continuationToken={continuationToken}
+
+Single:
+    pipelines/{pipelineId}?
+        pipelineVersion={pipelineVersion}
+*/
+public class PipelineOptions
+{
+    public int? PipelineId { get; set; }
+    public Dictionary<string, string> Arguments { get; set; } = new Dictionary<string, string>();
 }

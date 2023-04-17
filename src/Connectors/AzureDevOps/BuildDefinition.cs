@@ -1,4 +1,4 @@
-﻿using System.Text.Json.Serialization;
+﻿using System.Collections.Generic;
 
 namespace InfrastructureTools.Connectors.AzureDevOps;
 
@@ -6,28 +6,13 @@ public class BuildDefinition
 {
     public BuildDefinition() { }
 
-    [JsonPropertyName("id")]
     public int Id { get; set; }
-
-    [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
-
-    [JsonPropertyName("url")]
     public string Url { get; set; } = string.Empty;
-
-    [JsonPropertyName("path")]
     public string Path { get; set; } = string.Empty;
-
-    [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
-
-    [JsonPropertyName("queueStatus")]
     public string QueueStatus { get; set; } = string.Empty;
-
-    [JsonPropertyName("revision")]
     public int Revision { get; set; }
-
-    [JsonPropertyName("createdDate")]
     public string CreatedDate { get; set; } = string.Empty;
 
     public override string ToString()
@@ -42,4 +27,25 @@ Revision: {Revision}
 CreatedDate: {CreatedDate}
 ";
     }
+}
+
+/*
+All:
+    build/definitions?
+        name={name}&repositoryId={repositoryId}&repositoryType={repositoryType}&
+        queryOrder={queryOrder}&$top={$top}&continuationToken={continuationToken}&
+        minMetricsTime={minMetricsTime}&definitionIds={definitionIds}&path={path}&
+        builtAfter={builtAfter}&notBuiltAfter={notBuiltAfter}&includeAllProperties={includeAllProperties}&
+        includeLatestBuilds={includeLatestBuilds}&taskIdFilter={taskIdFilter}&
+        processType={processType}&yamlFilename={yamlFilename}
+Single:
+    build/definitions/{definitionId}?
+        revision={revision}&minMetricsTime={minMetricsTime}&propertyFilters={propertyFilters}&
+        includeLatestBuilds={includeLatestBuilds}
+
+*/
+public class BuildDefinitionOptions
+{
+    public string? BuildDefinitionName { get; set; }
+    public Dictionary<string, string> Arguments { get; set; } = new Dictionary<string, string>();
 }

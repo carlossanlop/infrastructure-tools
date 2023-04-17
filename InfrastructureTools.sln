@@ -22,6 +22,8 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "After", "src\AsmDiffTests\A
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "Before", "src\AsmDiffTests\Before\Before.csproj", "{15E66C4C-9FF6-42DB-989A-9C53CB68B36A}"
 EndProject
+Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "OfficeInterop", "src\Connectors\OfficeInterop\OfficeInterop.csproj", "{202FEE97-7766-41FC-A073-82393B082B64}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -48,6 +50,10 @@ Global
 		{15E66C4C-9FF6-42DB-989A-9C53CB68B36A}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{15E66C4C-9FF6-42DB-989A-9C53CB68B36A}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{15E66C4C-9FF6-42DB-989A-9C53CB68B36A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{202FEE97-7766-41FC-A073-82393B082B64}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{202FEE97-7766-41FC-A073-82393B082B64}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{202FEE97-7766-41FC-A073-82393B082B64}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{202FEE97-7766-41FC-A073-82393B082B64}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -60,6 +66,7 @@ Global
 		{75DB44DC-FAA1-46A0-8E82-9E67FF77323B} = {4590EF4E-5022-4392-BC52-4FB5AE2C2E4E}
 		{337970FA-3367-4DF2-B264-68B27CFF4E1B} = {75DB44DC-FAA1-46A0-8E82-9E67FF77323B}
 		{15E66C4C-9FF6-42DB-989A-9C53CB68B36A} = {75DB44DC-FAA1-46A0-8E82-9E67FF77323B}
+		{202FEE97-7766-41FC-A073-82393B082B64} = {E4E45EA9-0A6A-4906-AA64-EC989258CBEB}
 	EndGlobalSection
 	GlobalSection(ExtensibilityGlobals) = postSolution
 		SolutionGuid = {BFCF519E-6A71-41F1-84D2-30E9E8D27F00}

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
-using InfrastructureTools.Connectors.OfficeInterop;
+
+namespace InfrastructureTools.Connectors.OfficeInterop.Tests;
 
 public class OfficeInteropTests
 {
@@ -7,25 +8,72 @@ public class OfficeInteropTests
     public void VerifyEmail()
     {
         OutlookCommunicator c = new();
-        c.CreateEmail(new ItemOptions
+        ItemOptions itemOptions = new()
         {
             Subject = "MySubject",
             Body = "MyBody",
             Importance = ItemImportance.High,
-            Recipients = new List<RecipientOptions>
-            {
-                new RecipientOptions
-                {
-                    Email = "mail1@email.com",
-                    Required = true
-                }
-            }
-        });
+            Recipients =
+          [
+              new RecipientOptions
+          {
+              Email = "mail1@email.com",
+              Required = true
+          }
+          ]
+        };
+        c.CreateEmail(itemOptions);
     }
 
     [Fact]
     public void VerifyMeeting()
     {
+        OutlookCommunicator c = new();
+        List<RecipientOptions> recipients = [
+            new RecipientOptions
+            {
+                Email = "mail1@email.com",
+                Required = true
+            },
+            new RecipientOptions
+            {
+                Email = "mail2@email.com",
+                Required = false
+            }
+        ];
+        ItemOptions itemOptions = new()
+        {
+            Subject = "MySubject",
+            Body = "MyBody",
+            Importance = ItemImportance.Low,
+            Recipients = recipients
+        };
+        c.CreateMeeting(itemOptions);
+    }
 
+    [Fact]
+    public void VerifyAppointment()
+    {
+        OutlookCommunicator c = new();
+        List<RecipientOptions> recipients = [
+            new RecipientOptions
+            {
+                Email = "mail1@email.com",
+                Required = true
+            },
+            new RecipientOptions
+            {
+                Email = "mail2@email.com",
+                Required = false
+            }
+        ];
+        ItemOptions itemOptions = new()
+        {
+            Subject = "MySubject",
+            Body = "MyBody",
+            Importance = ItemImportance.Low,
+            Recipients = recipients
+        };
+        c.CreateAppointment(itemOptions);
     }
 }

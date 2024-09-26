@@ -28,8 +28,7 @@ public class OutlookCommunicator
 
     public void CreateEmail(ItemOptions options)
     {
-        MailItem mail =
-            (MailItem)Application.CreateItem(OlItemType.olMailItem) ??
+        MailItem mail = (MailItem)Application.CreateItem(OlItemType.olMailItem) ??
             throw new NullReferenceException("Could not create a mail item.");
 
         mail.Subject = options.Subject;
@@ -45,13 +44,18 @@ public class OutlookCommunicator
         mail.Display();
     }
 
-    public void CreateMeeting(ItemOptions options)
-    {
-        AppointmentItem appt =
-            (AppointmentItem)Application.CreateItem(OlItemType.olAppointmentItem) ??
-            throw new NullReferenceException("Could not create an appointment item.");
+    public void CreateAppointment(ItemOptions options) => CreateMeetingOrAppointment(options, OlMeetingStatus.olNonMeeting);
 
-        appt.MeetingStatus = OlMeetingStatus.olMeeting;
+    public void CreateMeeting(ItemOptions options) => CreateMeetingOrAppointment(options, OlMeetingStatus.olMeeting);
+
+    private void CreateMeetingOrAppointment(ItemOptions options, OlMeetingStatus meetingStatus)
+    {
+        Debug.Assert(meetingStatus is OlMeetingStatus.olMeeting or OlMeetingStatus.olNonMeeting);
+
+        AppointmentItem appt = (AppointmentItem)Application.CreateItem(OlItemType.olAppointmentItem) ??
+            throw new NullReferenceException(meetingStatus == OlMeetingStatus.olMeeting ? "Could not create an meeting item." : "Could not create an appointment item.");
+
+        appt.MeetingStatus = meetingStatus;
         appt.Location = options.Location;
         appt.Subject = options.Subject;
         appt.Body = options.Body;

@@ -1,0 +1,8 @@
+{
+    "AppName" : "",
+    "ClientId" : "",
+    "Secret" : "",
+    "AccessToken" : "",
+    "UserName" : "",
+    "Scopes" : ["user", "public_repo"]
+}

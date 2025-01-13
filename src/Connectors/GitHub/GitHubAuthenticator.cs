@@ -1,7 +1,8 @@
-﻿using Octokit;
+﻿using InfrastructureTools.Shared;
+using Octokit;
 using System;
+using System.Diagnostics;
 using System.IO;
-using System.Reflection;
 using System.Threading.Tasks;
 
 namespace InfrastructureTools.Connectors.GitHub;
@@ -11,128 +12,86 @@ namespace InfrastructureTools.Connectors.GitHub;
 /// </summary>
 public class GitHubAuthenticator
 {
-    private const string _cacheFileName = "GitHubCache.txt";
-    private readonly string _cacheFilePath;
-    private readonly string _appName;
-    private readonly string _clientId;
-    private readonly string _userName;
-    private readonly string _secret;
-    private readonly string[] _scopes;
-    private readonly GitHubClient _gitHubClient;
+    private readonly string[] DefaultScopes = ["public_repo", "user"];
+    private readonly GitHubOptions _options;
+    private GitHubClient? _client;
+
+    public static async Task<GitHubClient> GetClientAsync(string optionsFilePath)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(optionsFilePath);
+        ConsoleLog.WriteInfo($"Reading GitHub options from '{optionsFilePath}'...");
+        using FileStream fileStream = File.OpenRead(optionsFilePath);
+        GitHubOptions options = await System.Text.Json.JsonSerializer.DeserializeAsync<GitHubOptions>(fileStream) ?? throw new InvalidOperationException("The options file could not be deserialized.");
+        GitHubAuthenticator authenticator = new(options);
+        ConsoleLog.WriteSuccess("Successfully generated a GitHub client.");
+        return await authenticator.GetAuthenticatedClientAsync();
+    }
 
     /// <summary>
     /// Initializes a <see cref="GitHubAuthenticator"/> instance.
     /// </summary>
-    /// <param name="appName">The application name registered on GitHub.</param>
-    /// <param name="clientId">The client identifier.</param>
-    /// <param name="userName">The user to use for the queries.</param>
-    /// <param name="secret">The secret provided by GitHub.</param>
-    /// <param name="scopes">The desired scopes to access the APIs.</param>
-    /// <exception cref="ArgumentException"><paramref name="appName"/> or <paramref name="clientId"/> or <paramref name="userName"/> or <paramref name="secret"/> is <see langword="null"/> or empty.
-    /// -or-
-    /// <see cref="scopes"/> is empty.</exception>
-    /// <exception cref="ArgumentNullException"><see cref="scopes"/> is <see langword="null"/>.</exception>
-    /// <exception cref="DirectoryNotFoundException">Could not find the directory of either the entry assembly or the executing assembly.</exception>
-    public GitHubAuthenticator(
-        string appName,
-        string clientId,
-        string userName,
-        string secret,
-        string[] scopes)
+    /// <param name="options">The options to authenticate to GitHub.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="log"/> or <paramref name="options"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="options"/> is missing required properties.</exception>
+    public GitHubAuthenticator(GitHubOptions options)
     {
-        ArgumentException.ThrowIfNullOrEmpty(appName);
-        ArgumentException.ThrowIfNullOrEmpty(clientId);
-        ArgumentException.ThrowIfNullOrEmpty(userName);
-        ArgumentException.ThrowIfNullOrEmpty(secret);
-        ArgumentNullException.ThrowIfNull(scopes);
-        if (scopes.Length == 0)
+        ArgumentNullException.ThrowIfNull(options);
+        if (string.IsNullOrWhiteSpace(options.AccessToken))
         {
-            throw new ArgumentException("The scopes array is empty.");
+            ArgumentException.ThrowIfNullOrEmpty(options.AppName);
+            ArgumentException.ThrowIfNullOrEmpty(options.ClientId);
+            ArgumentException.ThrowIfNullOrEmpty(options.UserName);
+            ArgumentException.ThrowIfNullOrEmpty(options.Secret);
         }
 
-        _appName = appName;
-        _clientId = clientId;
-        _userName = userName;
-        _secret = secret;
-        _scopes = scopes;
+        if (options.Scopes == null || options.Scopes.Length == 0)
+        {
+            ConsoleLog.WriteInfo($"Setting default scopes: [{string.Join(", ", DefaultScopes)}]");
+            options.Scopes = DefaultScopes;
+        }
 
-        _gitHubClient = new GitHubClient(new ProductHeaderValue(_appName));
-
-        Assembly assembly = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
-        string assemblyDirectory = Path.GetDirectoryName(assembly.Location) ?? throw new DirectoryNotFoundException("Could not find the assembly directory.");
-
-        _cacheFilePath = Path.Join(assemblyDirectory, _cacheFileName);
+        _options = options;
     }
 
-    /// <summary>
-    /// Authenticates to GitHub using the information specified in the constructor.
-    /// </summary>
-    /// <returns>A <see cref="GitHubClient"/> instance that can be used to execute GitHub queries.</returns>
-    /// <exception cref="UnauthorizedAccessException">Authentication failed.</exception>
-    public async Task<GitHubClient> AuthenticateAsync()
+    private async Task<GitHubClient> GetAuthenticatedClientAsync()
     {
-        string? accessToken = await GetAccessTokenAsync();
-        if (string.IsNullOrWhiteSpace(accessToken))
-        {
-            throw new UnauthorizedAccessException("Authentication failed.");
-        }
-
-        _gitHubClient.Credentials = new Credentials(accessToken);
-        return _gitHubClient;
+        _client ??= new GitHubClient(new ProductHeaderValue(_options.AppName));
+        string accessToken = await GetAccessTokenAsync();
+        _client.Credentials = new Credentials(accessToken);
+        return _client;
     }
 
-    /// <summary>
-    /// Tries to get the access token from the cache or retrieve a new one interactively.
-    /// </summary>
-    /// <returns>On success, a string with a valid access token value. Otherwise, a <see cref="null"/> or empty string.</returns>
-    private async Task<string?> GetAccessTokenAsync()
+    private async Task<string> GetAccessTokenAsync()
     {
-        string? accessToken = null;
+        Debug.Assert(_client != null);
 
-        if (File.Exists(_cacheFilePath))
+        if (string.IsNullOrWhiteSpace(_options.AccessToken))
         {
-            accessToken = File.ReadAllText(_cacheFilePath);
-        }
-
-        if (string.IsNullOrWhiteSpace(accessToken))
-        {
-            OauthLoginRequest oauthLoginRequest = new(_clientId);
-            oauthLoginRequest.Scopes.Add(_userName);
-            foreach (string scope in _scopes)
+            ConsoleLog.WriteInfo("No access token provided. Authenticating to GitHub...");
+            OauthLoginRequest oauthLoginRequest = new(_options.ClientId);
+            foreach (string scope in _options.Scopes)
             {
                 oauthLoginRequest.Scopes.Add(scope);
             }
-
             string authCode = GetGitHubOAuthCode(oauthLoginRequest);
-
-            OauthTokenRequest oauthTokenRequest = new(_clientId, _secret, authCode);
-            OauthToken oauthToken = await _gitHubClient.Oauth.CreateAccessToken(oauthTokenRequest);
-
-            accessToken = oauthToken.AccessToken;
+            OauthTokenRequest oauthTokenRequest = new(_options.ClientId, _options.Secret, authCode);
+            OauthToken accessToken = await _client.Oauth.CreateAccessToken(oauthTokenRequest);
+            _options.AccessToken = accessToken.AccessToken;
         }
 
-        if (!string.IsNullOrWhiteSpace(accessToken))
-        {
-            File.WriteAllText(_cacheFilePath, accessToken);
-        }
-
-        return accessToken;
+        ConsoleLog.WriteSuccess("Successfully obtained a GitHub access token.");
+        return _options.AccessToken;
     }
 
-    /// <summary>
-    /// Collects the authentication code interactively with the user by printing instructions to the console.
-    /// </summary>
-    /// <param name="oauthLoginRequest">An oauth login request instance created for the current clientId.</param>
-    /// <returns>The authentication code provided interactively by the user.</returns>
     private string GetGitHubOAuthCode(OauthLoginRequest oauthLoginRequest)
     {
-        Uri url = _gitHubClient.Oauth.GetGitHubLoginUrl(oauthLoginRequest);
-        
-        Console.WriteLine($"Go to the authorization page '{url}' then paste the authentication code in the console.");
-        Console.Write("Paste the authentication code: ");
-        
+        Debug.Assert(_client != null);
+
+        Uri url = _client.Oauth.GetGitHubLoginUrl(oauthLoginRequest);
+        ConsoleLog.WriteWarning($"Go to the authorization page '{url}' then paste the authentication code in the console.");
+        ConsoleLog.WriteWarning("Paste the authentication code: ");
         string? authCode = Console.ReadLine();
-        ArgumentException.ThrowIfNullOrEmpty(authCode);
+        ArgumentException.ThrowIfNullOrWhiteSpace(authCode);
 
         return authCode;
     }

@@ -11,7 +11,7 @@ public class CommitCollector
 {
     private const string UserNameMaestroBot = "dotnet-maestro[bot]";
     private readonly string[] NewLines = ["\n", "\r\n"];
-    private readonly string[] InfraExtensions = [".config", ".csproj", ".editorconfig", ".gitignore", ".ilproj", ".json", ".md", ".pp", ".proj", ".props", ".ps1", ".ruleset", ".sln", ".targets", ".txt", ".xml", ".yml"];
+    private readonly string[] InfraExtensions = ["CMakeLists.txt", ".cmake", ".config", ".csproj", ".editorconfig", ".gitignore", ".ilproj", ".json", ".md", ".pp", ".proj", ".props", ".ps1", ".ruleset", ".sln", ".targets", ".txt", ".xml", ".yml"];
     private readonly string[] ForbiddenStrings = [
         "Update dependencies from ",
         "Merge branch "
@@ -26,7 +26,8 @@ public class CommitCollector
         "[release/9.0-staging] ",
     ];
     private readonly string[] StringPatternsToTrim = [
-        @"[ ]*\(\#\d+\)"
+        @"[ ]*\(\#\d+\)",
+        @"\[\d+\.0\] "
     ];
 
     private readonly GitHubClient _client;
@@ -77,7 +78,7 @@ public class CommitCollector
 
         List<(string, string)> skipped = new();
 
-        var table = new MarkdownTableBuilder().WithHeader("PR", "Assignee/Reviewer", "Comments", "Validation");
+        var table = new MarkdownTableBuilder().WithHeader("PR", "Author/Approvers", "Comments", "Validation status");
 
         foreach (PullRequestCommit commit in commits)
         {
@@ -90,7 +91,7 @@ public class CommitCollector
             else
             {
                 firstMessageLine = RemoveTexts(firstMessageLine);
-                table.WithRow(firstMessageLine, commit.Url, commit.Author.Login, string.Empty);
+                table.WithRow($"[{firstMessageLine}]({commit.Url})", commit.Author.Login, string.Empty /* Comments */,  string.Empty /* Validation status */);
             }
         }
 
@@ -129,7 +130,7 @@ public class CommitCollector
             // If the first line of the commit message contains any of the forbidden strings, then the commit is skippable
             if (firstMessageLine.Contains(text, StringComparison.InvariantCulture))
             {
-                reason = $"Forbidden message text: {text}";
+                reason = $"Skip title text: {text}";
                 return true;
             }
         }
@@ -139,7 +140,7 @@ public class CommitCollector
             // If the first line of the commit message matches any of the forbidden patterns, then the commit is skippable
             if (Regex.IsMatch(firstMessageLine, pattern))
             {
-                reason = $"Forbidden message pattern: {pattern}";
+                reason = $"Skip title pattern: {pattern[..19]}";
                 return true;
             }
         }
@@ -165,12 +166,12 @@ public class CommitCollector
     {
         foreach (string s in StringsToTrim)
         {
-            message = message.Replace(s, string.Empty);
+            message = message.Replace(s, string.Empty, StringComparison.InvariantCultureIgnoreCase);
         }
 
         foreach (string pattern in StringPatternsToTrim)
         {
-            message = Regex.Replace(message, pattern, string.Empty);
+            message = Regex.Replace(message, pattern, string.Empty, RegexOptions.IgnoreCase);
         }
 
         return message;

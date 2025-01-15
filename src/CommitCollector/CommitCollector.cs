@@ -15,7 +15,7 @@ namespace InfrastructureTools.CommitCollect;
 public class CommitCollector
 {
     private const string UserNameMaestroBot = "dotnet-maestro[bot]";
-    private const string UserNameGitHubActionsBot = "github-actions[bot]";
+    internal static readonly string UserNameGitHubActionsBot = "github-actions[bot]";
     private readonly string[] NewLines = ["\n", "\r\n"];
     private readonly string[] InfraExtensions = ["CMakeLists.txt", ".cmake", ".config", ".csproj", ".editorconfig", ".gitignore", ".ilproj", ".json", ".md", ".pp", ".proj", ".props", ".ps1", ".ruleset", ".sln", ".targets", ".txt", ".xml", ".yml"];
     private readonly string[] ForbiddenStrings = [
@@ -37,12 +37,16 @@ public class CommitCollector
     ];
 
     private readonly GitHubClient _client;
+    private readonly Dictionary<string, User> _knownPeople;
+    private readonly List<string> _errors;
     private string? _org;
     private string? _repo;
 
     private CommitCollector(GitHubClient client)
     {
         _client = client;
+        _knownPeople = new Dictionary<string, User>();
+        _errors = new List<string>();
     }
 
     public static async Task<CommitCollector> CreateAsync()
@@ -97,12 +101,11 @@ public class CommitCollector
             else
             {
                 firstMessageLine = RemoveTexts(firstMessageLine);
-                (PullRequest? pr, Dictionary<string, string> people) = GetPullRequestAuthorAndApprovers(ghCommit);
+                (PullRequest? pr, AuthorAndApprovers people) = GetPullRequestAuthorAndApprovers(firstMessageLine, ghCommit);
                 string url = pr == null ? ghCommit.HtmlUrl : pr.HtmlUrl;
-                table.WithRow($"[{firstMessageLine}]({url})", $"{string.Join(", ", people.Values)}", string.Empty /* Comments */,  string.Empty /* Validation status */);
+                table.WithRow($"[{firstMessageLine}]({url})", $"{people.Author} / {string.Join(", ", people.Approvers.Values)}", string.Empty /* Comments */,  string.Empty /* Validation status */);
             }
         }
-
 
         ConsoleLog.WriteWarning("-----");
         Console.WriteLine();
@@ -119,42 +122,66 @@ public class CommitCollector
             skippedTable = skippedTable.WithRow(reason, firstLine);
         }
         ConsoleLog.WriteFailure(skippedTable.ToString());
+
+        Console.WriteLine();
+        ConsoleLog.WriteWarning("-----");
+        Console.WriteLine();
+
+        if (_errors.Any())
+        {
+            ConsoleLog.WriteError("People loading errors:");
+            foreach (string error in _errors)
+            {
+                ConsoleLog.WriteError(error);
+            }
+        }
     }
 
-    private (PullRequest?, Dictionary<string, string>) GetPullRequestAuthorAndApprovers(GitHubCommit commit)
+    private (PullRequest?, AuthorAndApprovers) GetPullRequestAuthorAndApprovers(string firstLine, GitHubCommit commit)
     {
-        string firstLine = GetFirstLine(commit.Commit.Message);
-
-        Dictionary<string, string> people = new(); // alias -> name
+        AuthorAndApprovers people = new(commit.Commit.Author.Name);
 
         Match matchPrNumberInCommitTitle = Regex.Match(firstLine, @"\(\#(?<prNumber>\d+)\)");
-
+        int initialPrNumber;
         if (!matchPrNumberInCommitTitle.Success)
         {
-            return (null, people);
+            // Just in case, try find a prNumber in the full body
+            Match matchPrNumberInCommitFullTitle = Regex.Match(commit.Commit.Message, @"\(\#(?<prNumber>\d+)\)");
+            if (!matchPrNumberInCommitFullTitle.Success)
+            {
+                _errors.Add($"{commit.Sha[..8]} - {firstLine} - No PR number found in the commit title.");
+                return (null, people);
+            }
+
+            initialPrNumber = int.Parse(matchPrNumberInCommitFullTitle.Groups["prNumber"].Value);
+        }
+        else
+        {
+            initialPrNumber = int.Parse(matchPrNumberInCommitTitle.Groups["prNumber"].Value);
         }
 
-        int prNumber = int.Parse(matchPrNumberInCommitTitle.Groups["prNumber"].Value);
-
-        if (!TryGetPrAndAddPeople(people, prNumber, out PullRequest? pr))
+        if (!TryGetPR(initialPrNumber, out PullRequest? pr))
         {
             return (null, people);
         }
+        AddPeople(people, pr);
 
-        if (commit.Commit.Author.Name == UserNameGitHubActionsBot)
+        if (people.Author == UserNameGitHubActionsBot)
         {
             // The initial PR is a backport PR
             Match matchOriginalPrNumberInBackportBody = Regex.Match(pr.Body, @"(Backport of|Backports) \#(?'originalPrNumber'\d+)");
             if (!matchOriginalPrNumberInBackportBody.Success)
             {
+                _errors.Add($"{commit.Commit.Sha[..8]} - {firstLine} - Did not find 'Backport of' text in PR body.");
                 return (pr, people);
             }
 
             int actualPrNumber = int.Parse(matchOriginalPrNumberInBackportBody.Groups["originalPrNumber"].Value);
-            if (!TryGetPrAndAddPeople(people, actualPrNumber, out PullRequest? actualPr))
+            if (!TryGetPR(actualPrNumber, out PullRequest? actualPr))
             {
                 return (pr, people);
             }
+            AddPeople(people, actualPr);
 
             // Only one more level check, in case it's a backport of another backport
             if (actualPr.User.Login == UserNameGitHubActionsBot)
@@ -162,66 +189,77 @@ public class CommitCollector
                 Match matchfirstPrLink = Regex.Match(actualPr.Body, @"\#(?'secondBackportPrNumber'\d+)");
                 if (!matchfirstPrLink.Success)
                 {
+                    _errors.Add($"{commit.Commit.Sha[..8]} - {firstLine} - Could not find a link to the second backport PR.");
                     return (actualPr, people);
                 }
 
                 int secondBackportPrNumber = int.Parse(matchfirstPrLink.Groups["secondBackportPrNumber"].Value);
-                if (!TryGetPrAndAddPeople(people, secondBackportPrNumber, out PullRequest? SecondPr))
+                if (!TryGetPR(secondBackportPrNumber, out PullRequest? SecondPr))
                 {
                     return (actualPr, people);
                 }
+                AddPeople(people, SecondPr);
                 pr = SecondPr;
             }
         }
 
-
         return (pr, people);
     }
 
-    private bool TryGetPrAndAddPeople(Dictionary<string, string> people, int prNumber, [NotNullWhen(returnValue: true)] out PullRequest? pr)
+    private bool TryGetPR(int prNumber, [NotNullWhen(returnValue: true)] out PullRequest? pr)
     {
-        try
-        {
-            pr = _client.PullRequest.Get(_org, _repo, prNumber).Result;
-            AddPeople(people, pr);
-            return pr != null;
-        }
-        catch {}
+        pr = _client.PullRequest.Get(_org, _repo, prNumber).Result;
 
-        pr = null;
-        return false;
+        if (pr == null)
+        {
+            _errors.Add($"Could not retrieve PR for pr number {prNumber}.");
+        }
+
+        return pr != null;
     }
 
-    private void AddPeople(Dictionary<string, string> people, PullRequest pr)
+    private void AddPeople(AuthorAndApprovers people, PullRequest pr)
     {
-        if (pr.Assignee.Login != UserNameGitHubActionsBot && !people.ContainsKey(pr.Assignee.Login))
+        if (pr.User.Login != UserNameGitHubActionsBot)
         {
-            User assignee = _client.User.Get(pr.Assignee.Login).Result;
-            people.TryAdd(assignee.Login, GetNameOrUserName(assignee));
+            User creator = GetCachedUser(pr.User.Login);
+            people.Update(creator);
         }
-        if (pr.User.Login != UserNameGitHubActionsBot && !people.ContainsKey(pr.User.Login))
+
+        if (pr.Assignee != null && pr.Assignee.Login != UserNameGitHubActionsBot)
         {
-            User creator = _client.User.Get(pr.User.Login).Result;
-            people.TryAdd(creator.Login, GetNameOrUserName(creator));
+            User assignee = GetCachedUser(pr.Assignee.Login);
+            people.Update(assignee);
         }
-        foreach (string reviewerLogin in pr.RequestedReviewers.Where(r => r.Login != UserNameGitHubActionsBot && !people.ContainsKey(r.Login)).Select(r => r.Login))
+
+        foreach (string reviewerLogin in pr.RequestedReviewers.Where(r => r.Login != UserNameGitHubActionsBot && !people.Approvers.ContainsKey(r.Login)).Select(r => r.Login))
         {
-            User reviewer = _client.User.Get(reviewerLogin).Result;
-            people.TryAdd(reviewer.Login, GetNameOrUserName(reviewer));
+            User reviewer = GetCachedUser(reviewerLogin);
+            people.Update(reviewer);
         }
 
         IReadOnlyList<PullRequestReview> reviews = _client.PullRequest.Review.GetAll(_org, _repo, pr.Number).Result;
         foreach (PullRequestReview review in reviews)
         {
-            if (review.State == PullRequestReviewState.Approved && !people.ContainsKey(review.User.Login))
+            if (review.State == PullRequestReviewState.Approved && !people.Approvers.ContainsKey(review.User.Login))
             {
-                User reviewer = _client.User.Get(review.User.Login).Result;
-                people.TryAdd(reviewer.Login, GetNameOrUserName(reviewer));
+                User reviewer = GetCachedUser(review.User.Login);
+                people.Update(reviewer);
             }
         }
     }
 
-    private string GetNameOrUserName(User user) => string.IsNullOrWhiteSpace(user.Name) ? user.Login : user.Name;
+    private User GetCachedUser(string login)
+    {
+        if (_knownPeople.TryGetValue(login, out User? value))
+        {
+            return value;
+        }
+
+        User user = _client.User.Get(login).Result;
+        _knownPeople.Add(login, user);
+        return user;
+    }
 
     private bool IsSkippable(string firstMessageLine, GitHubCommit commit, [NotNullWhen(returnValue: true)] out string? reason)
     {
@@ -287,4 +325,29 @@ public class CommitCollector
     }
 
     private string GetFirstLine(string txt) => txt.Split(NewLines, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).First();
+}
+
+internal class AuthorAndApprovers
+{
+    public string Author { get; set; }
+    public Dictionary<string, string> Approvers { get; } // alias -> name
+    public AuthorAndApprovers(string commitCreator)
+    {
+        Author = commitCreator;
+        Approvers = new Dictionary<string, string>();
+    }
+    public void Update(User user)
+    {
+        string name = GetNameOrUserName(user);
+        if (Author == string.Empty || Author == CommitCollector.UserNameGitHubActionsBot)
+        {
+            Author = name;
+        }
+        if (!Approvers.ContainsKey(user.Login))
+        {
+            Approvers.Add(user.Login, name);
+        }
+    }
+    private string GetNameOrUserName(User user) => string.IsNullOrWhiteSpace(user.Name) ? user.Login : user.Name;
+
 }

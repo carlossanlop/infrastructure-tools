@@ -12,7 +12,7 @@ using System.Linq;
 
 namespace InfrastructureTools.CommitCollect;
 
-public class CommitCollector
+public partial class CommitCollector
 {
     private const string UserNameMaestroBot = "dotnet-maestro[bot]";
     internal static readonly string UserNameGitHubActionsBot = "github-actions[bot]";
@@ -116,12 +116,12 @@ public class CommitCollector
 
         var skippedTable = new MarkdownTableBuilder().WithHeader("Reason", "Title");
 
-        ConsoleLog.WriteFailure("Commits that were skipped:");
+        ConsoleLog.WriteWarning("Commits that were skipped:");
         foreach ((string reason, string firstLine) in skipped)
         {
             skippedTable = skippedTable.WithRow(reason, firstLine);
         }
-        ConsoleLog.WriteFailure(skippedTable.ToString());
+        ConsoleLog.WriteWarning(skippedTable.ToString());
 
         Console.WriteLine();
         ConsoleLog.WriteWarning("-----");
@@ -141,25 +141,20 @@ public class CommitCollector
     {
         AuthorAndApprovers people = new(commit.Commit.Author.Name);
 
-        Match matchPrNumberInCommitTitle = Regex.Match(firstLine, @"\(\#(?<prNumber>\d+)\)");
+        Match matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(firstLine);
         int initialPrNumber;
         if (!matchPrNumberInCommitTitle.Success)
         {
             // Just in case, try find a prNumber in the full body
-            Match matchPrNumberInCommitFullTitle = Regex.Match(commit.Commit.Message, @"\(\#(?<prNumber>\d+)\)");
-            if (!matchPrNumberInCommitFullTitle.Success)
+            matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(commit.Commit.Message);
+            if (!matchPrNumberInCommitTitle.Success)
             {
                 _errors.Add($"{commit.Sha[..8]} - {firstLine} - No PR number found in the commit title.");
                 return (null, people);
             }
-
-            initialPrNumber = int.Parse(matchPrNumberInCommitFullTitle.Groups["prNumber"].Value);
-        }
-        else
-        {
-            initialPrNumber = int.Parse(matchPrNumberInCommitTitle.Groups["prNumber"].Value);
         }
 
+        initialPrNumber = int.Parse(matchPrNumberInCommitTitle.Groups["prNumber"].Value);
         if (!TryGetPR(initialPrNumber, out PullRequest? pr))
         {
             return (null, people);
@@ -169,14 +164,14 @@ public class CommitCollector
         if (people.Author == UserNameGitHubActionsBot)
         {
             // The initial PR is a backport PR
-            Match matchOriginalPrNumberInBackportBody = Regex.Match(pr.Body, @"(Backport of|Backports) \#(?'originalPrNumber'\d+)");
+            Match matchOriginalPrNumberInBackportBody = MarkdownPrNumberRegex().Match(pr.Body);
             if (!matchOriginalPrNumberInBackportBody.Success)
             {
                 _errors.Add($"{commit.Commit.Sha[..8]} - {firstLine} - Did not find 'Backport of' text in PR body.");
                 return (pr, people);
             }
 
-            int actualPrNumber = int.Parse(matchOriginalPrNumberInBackportBody.Groups["originalPrNumber"].Value);
+            int actualPrNumber = int.Parse(matchOriginalPrNumberInBackportBody.Groups["prNumber"].Value);
             if (!TryGetPR(actualPrNumber, out PullRequest? actualPr))
             {
                 return (pr, people);
@@ -186,14 +181,14 @@ public class CommitCollector
             // Only one more level check, in case it's a backport of another backport
             if (actualPr.User.Login == UserNameGitHubActionsBot)
             {
-                Match matchfirstPrLink = Regex.Match(actualPr.Body, @"\#(?'secondBackportPrNumber'\d+)");
+                Match matchfirstPrLink = MarkdownPrNumberRegex().Match(actualPr.Body);
                 if (!matchfirstPrLink.Success)
                 {
                     _errors.Add($"{commit.Commit.Sha[..8]} - {firstLine} - Could not find a link to the second backport PR.");
                     return (actualPr, people);
                 }
 
-                int secondBackportPrNumber = int.Parse(matchfirstPrLink.Groups["secondBackportPrNumber"].Value);
+                int secondBackportPrNumber = int.Parse(matchfirstPrLink.Groups["prNumber"].Value);
                 if (!TryGetPR(secondBackportPrNumber, out PullRequest? SecondPr))
                 {
                     return (actualPr, people);
@@ -325,6 +320,9 @@ public class CommitCollector
     }
 
     private string GetFirstLine(string txt) => txt.Split(NewLines, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).First();
+
+    [GeneratedRegex(@"\(\#(?<prNumber>\d+)\)")]
+    private static partial Regex MarkdownPrNumberRegex();
 }
 
 internal class AuthorAndApprovers

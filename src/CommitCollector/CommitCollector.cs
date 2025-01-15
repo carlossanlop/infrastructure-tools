@@ -341,8 +341,9 @@ internal class AuthorAndApprovers
         {
             Author = name;
         }
-        if (!Approvers.ContainsKey(user.Login))
+        if (Author != name && !Approvers.ContainsKey(user.Login))
         {
+            // Only add this user to approvers if it is not the author
             Approvers.Add(user.Login, name);
         }
     }

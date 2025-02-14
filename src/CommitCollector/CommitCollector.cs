@@ -9,21 +9,24 @@ using System.IO;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 
-namespace InfrastructureTools.CommitCollect;
+namespace InfrastructureTools.CommitCollector;
 
 public partial class CommitCollector
 {
-    private const string UserNameMaestroBot = "dotnet-maestro[bot]";
+
+    public static readonly string DefaultConfigJsonFileName = "infrastructure-tools-settings.json";
+    public static string DefaultConfigJsonFilePath = Path.Join(Path.GetTempPath(), DefaultConfigJsonFileName);
     internal static readonly string UserNameGitHubActionsBot = "github-actions[bot]";
-    private readonly string[] NewLines = ["\n", "\r\n"];
-    private readonly string[] InfraExtensions = ["CMakeLists.txt", ".cmake", ".config", ".csproj", ".editorconfig", ".gitignore", ".ilproj", ".json", ".md", ".pp", ".proj", ".props", ".ps1", ".ruleset", ".sln", ".targets", ".txt", ".xml", ".yml"];
+    private const string UserNameMaestroBot = "dotnet-maestro[bot]";
+    private readonly string[] InfraExtensions = ["CMakeLists.txt", ".cmake", ".config", ".csproj", ".editorconfig", ".gitignore", ".ilproj", ".inc", ".json", ".md", ".pp", ".proj", ".props", ".ps1", ".ruleset", ".S", ".sln", ".targets", ".txt", ".xml", ".yml"];
     private readonly string[] ForbiddenStrings = [
         "Update dependencies from ",
         "Merge branch "
     ];
     private readonly string[] ForbiddenPatterns = [
-        @"Merge pull request (dotnet)?\#\d+ from dotnet/merge/release/"
+        @"Merge pull request (dotnet)?\#\d+ from "
     ];
     private readonly string[] StringsToTrim = [
         "[release/8.0] ",
@@ -35,121 +38,111 @@ public partial class CommitCollector
         @"[ ]*\(\#\d+\)",
         @"\[\d+\.0\] "
     ];
+    private static readonly char[] NewLineChar = ['\n'];
 
-    private readonly GitHubClient _client;
     private readonly Dictionary<string, User> _knownPeople;
     private readonly List<string> _errors;
-    private string? _org;
-    private string? _repo;
+    private readonly string _org;
+    private readonly string _repo;
 
-    private CommitCollector(GitHubClient client)
+    public static Lazy<string> SerializedGitHubOptions => new Lazy<string>(() => JsonSerializer.Serialize(value: new GitHubOptions(), options: new JsonSerializerOptions() { WriteIndented = true }));
+
+    public GitHubClient Client { get; }
+
+    private CommitCollector(GitHubClient client, string org, string repo)
     {
-        _client = client;
+        Client = client;
+        _org = org;
+        _repo = repo;
         _knownPeople = new Dictionary<string, User>();
         _errors = new List<string>();
     }
 
-    public static async Task<CommitCollector> CreateAsync()
+    public static async Task<CommitCollector> CreateAsync(string configFilePath, string org, string repo, bool askForOptions = true)
     {
-        string tmpFilePath = Path.Join(Path.GetTempPath(), "infrastructure-tools-settings.json");
-
         string? optionsFilePath;
-        if (!File.Exists(tmpFilePath))
+
+        if (File.Exists(configFilePath))
         {
-            Console.Write("Enter the path to the GitHub options file path: ");
-            optionsFilePath = Console.ReadLine();
-            ArgumentException.ThrowIfNullOrEmpty(optionsFilePath);
-            if (!File.Exists(optionsFilePath))
-            {
-                throw new FileNotFoundException("GitHub options file not found.", optionsFilePath);
-            }
+            optionsFilePath = configFilePath;
+        }
+        else if (File.Exists(DefaultConfigJsonFilePath))
+        {
+            optionsFilePath = DefaultConfigJsonFilePath;
         }
         else
         {
-            optionsFilePath = tmpFilePath;
-            Console.WriteLine($"Found pre-existing GitHub options file: {tmpFilePath}. If retrieving the client fails, update or delete that file and run this tool again.");
-        }
-
-        GitHubClient client = await GitHubAuthenticator.GetClientAsync(optionsFilePath);
-        if (optionsFilePath != tmpFilePath)
-        {
-            File.Copy(optionsFilePath, tmpFilePath);
-        }
-
-        return new CommitCollector(client);
-    }
-
-    public void Run(string org, string repo, int prNumber)
-    {
-        _org = org;
-        _repo = repo;
-
-        IReadOnlyList<PullRequestCommit> commits = _client.PullRequest.Commits(_org, _repo, prNumber).Result;
-
-        List<(string, string)> skipped = new();
-
-        var table = new MarkdownTableBuilder().WithHeader("PR", "Author/Approvers", "Comments", "Validation status");
-
-        foreach (PullRequestCommit commit in commits)
-        {
-            string firstMessageLine = GetFirstLine(commit.Commit.Message);
-            GitHubCommit ghCommit = _client.Repository.Commit.Get(_org, _repo, commit.Sha).Result;
-            if (IsSkippable(firstMessageLine, ghCommit, out string? reason))
+            string noFilesFoundMessage = $"No GitHub options file found in the specified config path '{configFilePath}' or in the default config path '{DefaultConfigJsonFilePath}'.";
+            if (askForOptions)
             {
-                skipped.Add((reason, firstMessageLine));
+                Console.WriteLine(noFilesFoundMessage);
+                Console.Write("Enter the path to the GitHub options file path: ");
+                optionsFilePath = Console.ReadLine();
+                ArgumentException.ThrowIfNullOrEmpty(optionsFilePath);
+                if (!File.Exists(optionsFilePath))
+                {
+                    throw new FileNotFoundException("GitHub options file not found.", optionsFilePath);
+                }
             }
             else
             {
-                firstMessageLine = RemoveTexts(firstMessageLine);
-                (PullRequest? pr, AuthorAndApprovers people) = GetPullRequestAuthorAndApprovers(firstMessageLine, ghCommit);
-                string url = pr == null ? ghCommit.HtmlUrl : pr.HtmlUrl;
-                table.WithRow($"[{firstMessageLine}]({url})", $"{people.Author} / {string.Join(", ", people.Approvers.Values)}", string.Empty /* Comments */,  string.Empty /* Validation status */);
+                throw new FileNotFoundException(noFilesFoundMessage);
             }
         }
 
-        ConsoleLog.WriteWarning("-----");
-        Console.WriteLine();
-        ConsoleLog.WriteSuccess(table.ToString());
-        Console.WriteLine();
-        ConsoleLog.WriteWarning("-----");
-        Console.WriteLine();
-
-        var skippedTable = new MarkdownTableBuilder().WithHeader("Reason", "Title");
-
-        ConsoleLog.WriteWarning("Commits that were skipped:");
-        foreach ((string reason, string firstLine) in skipped)
+        GitHubClient client = await GitHubAuthenticator.GetClientAsync(optionsFilePath);
+        if (optionsFilePath != DefaultConfigJsonFilePath)
         {
-            skippedTable = skippedTable.WithRow(reason, firstLine);
+            File.Copy(optionsFilePath, DefaultConfigJsonFilePath);
         }
-        ConsoleLog.WriteWarning(skippedTable.ToString());
 
-        Console.WriteLine();
-        ConsoleLog.WriteWarning("-----");
-        Console.WriteLine();
+        return new CommitCollector(client, org, repo);
+    }
 
-        if (_errors.Any())
+    public void Run(int prNumber)
+    {
+        IReadOnlyList<PullRequestCommit> prCommits = Client.PullRequest.Commits(_org, _repo, prNumber).Result;
+
+        List<(PullRequestCommit, GitHubCommit)> included = new();
+        List<(PullRequestCommit, string)> skipped = new();
+
+        foreach (PullRequestCommit prCommit in prCommits)
         {
-            ConsoleLog.WriteError("People loading errors:");
-            foreach (string error in _errors)
-            {
-                ConsoleLog.WriteError(error);
-            }
+            ProcessPullRequestCommit(prCommit, included, skipped);
+        }
+
+        PrintIncludedTable(included);
+        PrintSkippedTable(skipped);
+        PrintErrors();
+    }
+
+    public void ProcessPullRequestCommit(PullRequestCommit prCommit, List<(PullRequestCommit, GitHubCommit)> included, List<(PullRequestCommit, string)> skipped)
+    {
+        GitHubCommit ghCommit = Client.Repository.Commit.Get(_org, _repo, prCommit.Sha).Result;
+        if (IsSkippable(prCommit, ghCommit, out string? reason))
+        {
+            skipped.Add((prCommit, reason));
+        }
+        else
+        {
+            included.Add((prCommit, ghCommit));
         }
     }
 
-    private (PullRequest?, AuthorAndApprovers) GetPullRequestAuthorAndApprovers(string firstLine, GitHubCommit commit)
+    public (PullRequest?, AuthorAndApprovers) GetPullRequestAuthorAndApprovers(PullRequestCommit prCommit, GitHubCommit gcCommit)
     {
-        AuthorAndApprovers people = new(commit.Commit.Author.Name);
+        AuthorAndApprovers people = new(gcCommit.Commit.Author.Name);
 
-        Match matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(firstLine);
+        ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
+        Match matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(prCommit.Commit.Message);
         int initialPrNumber;
         if (!matchPrNumberInCommitTitle.Success)
         {
             // Just in case, try find a prNumber in the full body
-            matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(commit.Commit.Message);
+            matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(gcCommit.Commit.Message);
             if (!matchPrNumberInCommitTitle.Success)
             {
-                _errors.Add($"{commit.Sha[..8]} - {firstLine} - No PR number found in the commit title.");
+                _errors.Add($"{gcCommit.Sha[..8]} - {firstLine} - No PR number found in the commit title.");
                 return (null, people);
             }
         }
@@ -167,7 +160,7 @@ public partial class CommitCollector
             Match matchOriginalPrNumberInBackportBody = MarkdownPrNumberRegex().Match(pr.Body);
             if (!matchOriginalPrNumberInBackportBody.Success)
             {
-                _errors.Add($"{commit.Commit.Sha[..8]} - {firstLine} - Did not find 'Backport of' text in PR body.");
+                _errors.Add($"{gcCommit.Commit.Sha[..8]} - {firstLine} - Did not find 'Backport of' text in PR body.");
                 return (pr, people);
             }
 
@@ -184,7 +177,7 @@ public partial class CommitCollector
                 Match matchfirstPrLink = MarkdownPrNumberRegex().Match(actualPr.Body);
                 if (!matchfirstPrLink.Success)
                 {
-                    _errors.Add($"{commit.Commit.Sha[..8]} - {firstLine} - Could not find a link to the second backport PR.");
+                    _errors.Add($"{gcCommit.Commit.Sha[..8]} - {firstLine} - Could not find a link to the second backport PR.");
                     return (actualPr, people);
                 }
 
@@ -201,9 +194,63 @@ public partial class CommitCollector
         return (pr, people);
     }
 
+    private void PrintIncludedTable(List<(PullRequestCommit, GitHubCommit)> included)
+    {
+        var table = new MarkdownTableBuilder().WithHeader("PR", "Author/Approvers", "Comments", "Validation status");
+        foreach ((PullRequestCommit prCommit, GitHubCommit ghCommit) in included)
+        {
+            (PullRequest? pr, AuthorAndApprovers people) = GetPullRequestAuthorAndApprovers(prCommit, ghCommit);
+            string url = pr == null ? ghCommit.HtmlUrl : pr.HtmlUrl;
+            ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
+            string cleanedLine = RemoveUndesiredTexts(firstLine);
+            table = table.WithRow($"[{cleanedLine}]({url})",
+                          $"{people.Author} / {string.Join(", ", people.Approvers.Values)}",
+                          string.Empty /* Comments */,
+                          string.Empty /* Validation status */);
+        }
+
+        ConsoleLog.WriteWarning("-----");
+        Console.WriteLine();
+        ConsoleLog.WriteSuccess(table.ToString());
+        Console.WriteLine();
+        ConsoleLog.WriteWarning("-----");
+        Console.WriteLine();
+    }
+
+    private void PrintSkippedTable(List<(PullRequestCommit, string)> skipped)
+    {
+        var table = new MarkdownTableBuilder().WithHeader("Reason", "Title");
+        foreach ((PullRequestCommit prCommit, string reason) in skipped)
+        {
+            ReadOnlySpan<char> line = GetFirstLine(prCommit.Commit.Message);
+            ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
+            string cleanedLine = RemoveUndesiredTexts(firstLine);
+            table = table.WithRow(reason, $"{cleanedLine}");
+        }
+
+        ConsoleLog.WriteWarning("Commits that were skipped:");
+        ConsoleLog.WriteWarning(table.ToString());
+
+        Console.WriteLine();
+        ConsoleLog.WriteWarning("-----");
+        Console.WriteLine();
+    }
+
+    private void PrintErrors()
+    {
+        if (_errors.Any())
+        {
+            ConsoleLog.WriteError("People loading errors:");
+            foreach (string error in _errors)
+            {
+                ConsoleLog.WriteError(error);
+            }
+        }
+    }
+
     private bool TryGetPR(int prNumber, [NotNullWhen(returnValue: true)] out PullRequest? pr)
     {
-        pr = _client.PullRequest.Get(_org, _repo, prNumber).Result;
+        pr = Client.PullRequest.Get(_org, _repo, prNumber).Result;
 
         if (pr == null)
         {
@@ -233,7 +280,7 @@ public partial class CommitCollector
             people.Update(reviewer);
         }
 
-        IReadOnlyList<PullRequestReview> reviews = _client.PullRequest.Review.GetAll(_org, _repo, pr.Number).Result;
+        IReadOnlyList<PullRequestReview> reviews = Client.PullRequest.Review.GetAll(_org, _repo, pr.Number).Result;
         foreach (PullRequestReview review in reviews)
         {
             if (review.State == PullRequestReviewState.Approved && !people.Approvers.ContainsKey(review.User.Login))
@@ -251,17 +298,19 @@ public partial class CommitCollector
             return value;
         }
 
-        User user = _client.User.Get(login).Result;
+        User user = Client.User.Get(login).Result;
         _knownPeople.Add(login, user);
         return user;
     }
 
-    private bool IsSkippable(string firstMessageLine, GitHubCommit commit, [NotNullWhen(returnValue: true)] out string? reason)
+    private bool IsSkippable(PullRequestCommit prCommit, GitHubCommit ghCommit, [NotNullWhen(returnValue: true)] out string? reason)
     {
         reason = null;
 
+        ReadOnlySpan<char> firstMessageLine = GetFirstLine(prCommit.Commit.Message);
+
         // If the author is the Maestro bot, then the commit is skippable
-        if (commit.Author.Login == UserNameMaestroBot)
+        if (ghCommit.Author.Login == UserNameMaestroBot)
         {
             reason = "author: maestrobot";
             return true;
@@ -288,14 +337,14 @@ public partial class CommitCollector
         }
 
         // If all files in the commit are infra files, then the commit is skippable
-        if (commit.Files.All(file => InfraExtensions.Any(ext => file.Filename.EndsWith(ext, StringComparison.InvariantCultureIgnoreCase))))
+        if (ghCommit.Files.All(file => InfraExtensions.Any(ext => file.Filename.EndsWith(ext, StringComparison.InvariantCultureIgnoreCase))))
         {
             reason = "All infra files";
             return true;
         }
 
         // If all files in the commit are test files, then the commit is skippable
-        if (commit.Files.All(file => file.Filename.Contains("test", StringComparison.InvariantCultureIgnoreCase)))
+        if (ghCommit.Files.All(file => file.Filename.Contains("test", StringComparison.InvariantCultureIgnoreCase)))
         {
             reason = "All test files";
             return true;
@@ -304,28 +353,39 @@ public partial class CommitCollector
         return false;
     }
 
-    private string RemoveTexts(string message)
+    private string RemoveUndesiredTexts(ReadOnlySpan<char> message)
     {
+        string result = message.ToString();
+
         foreach (string s in StringsToTrim)
         {
-            message = message.Replace(s, string.Empty, StringComparison.InvariantCultureIgnoreCase);
+            result = result.Replace(s, string.Empty, StringComparison.InvariantCultureIgnoreCase);
         }
 
         foreach (string pattern in StringPatternsToTrim)
         {
-            message = Regex.Replace(message, pattern, string.Empty, RegexOptions.IgnoreCase);
+            result = Regex.Replace(result, pattern, string.Empty, RegexOptions.IgnoreCase);
         }
 
-        return message;
+        return result;
     }
 
-    private string GetFirstLine(string txt) => txt.Split(NewLines, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).First();
+    private ReadOnlySpan<char> GetFirstLine(string txt)
+    {
+        int index = txt.IndexOfAny(NewLineChar);
+        if (index == -1)
+        {
+            index = txt.Length;
+        }
+
+        return txt.AsSpan(0, index);
+    }
 
     [GeneratedRegex(@"\(\#(?<prNumber>\d+)\)")]
     private static partial Regex MarkdownPrNumberRegex();
 }
 
-internal class AuthorAndApprovers
+public class AuthorAndApprovers
 {
     public string Author { get; set; }
     public Dictionary<string, string> Approvers { get; } // alias -> name

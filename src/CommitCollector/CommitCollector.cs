@@ -20,10 +20,11 @@ public partial class CommitCollector
     public static string DefaultConfigJsonFilePath = Path.Join(Path.GetTempPath(), DefaultConfigJsonFileName);
     internal static readonly string UserNameGitHubActionsBot = "github-actions[bot]";
     private const string UserNameMaestroBot = "dotnet-maestro[bot]";
-    private readonly string[] InfraExtensions = ["CMakeLists.txt", ".cmake", ".config", ".csproj", ".editorconfig", ".gitignore", ".ilproj", ".inc", ".json", ".md", ".pp", ".proj", ".props", ".ps1", ".ruleset", ".S", ".sln", ".targets", ".txt", ".xml", ".yml"];
+    private readonly string[] InfraExtensions = ["CMakeLists.txt", ".cmake", ".config", ".csproj", ".editorconfig", ".gitignore", ".ilproj", ".inc", ".json", ".md", ".pp", ".proj", ".props", ".ps1", ".ruleset", ".S", ".sh", ".sln", ".targets", ".txt", ".xml", ".yml"];
     private readonly string[] ForbiddenStrings = [
         "Update dependencies from ",
-        "Merge branch "
+        "Merge branch ",
+        "Merge remote-tracking branch "
     ];
     private readonly string[] ForbiddenPatterns = [
         @"Merge pull request (dotnet)?\#\d+ from "
@@ -41,9 +42,10 @@ public partial class CommitCollector
     private static readonly char[] NewLineChar = ['\n'];
 
     private readonly Dictionary<string, User> _knownPeople;
-    private readonly List<string> _errors;
     private readonly string _org;
     private readonly string _repo;
+
+    public List<string> Errors { get; }
 
     public static Lazy<string> SerializedGitHubOptions => new Lazy<string>(() => JsonSerializer.Serialize(value: new GitHubOptions(), options: new JsonSerializerOptions() { WriteIndented = true }));
 
@@ -55,7 +57,7 @@ public partial class CommitCollector
         _org = org;
         _repo = repo;
         _knownPeople = new Dictionary<string, User>();
-        _errors = new List<string>();
+        Errors = new List<string>();
     }
 
     public static async Task<CommitCollector> CreateAsync(string configFilePath, string org, string repo, bool askForOptions = true)
@@ -111,8 +113,10 @@ public partial class CommitCollector
             ProcessPullRequestCommit(prCommit, included, skipped);
         }
 
-        PrintIncludedTable(included);
-        PrintSkippedTable(skipped);
+        MarkdownTableBuilder includedTable = GetIncludedTable(included);
+        PrintIncludedTable(includedTable);
+        MarkdownTableBuilder skippedTable = GetSkippedTable(skipped);
+        PrintSkippedTable(skippedTable);
         PrintErrors();
     }
 
@@ -129,6 +133,42 @@ public partial class CommitCollector
         }
     }
 
+    public MarkdownTableBuilder GetIncludedTable(List<(PullRequestCommit, GitHubCommit)> included)
+    {
+        MarkdownTableBuilder table = new MarkdownTableBuilder()
+            .WithHeader("PR", "Author/Approvers", "Comments", "Validation status");
+
+        foreach ((PullRequestCommit prCommit, GitHubCommit ghCommit) in included)
+        {
+            (PullRequest? pr, AuthorAndApprovers people) = GetPullRequestAuthorAndApprovers(prCommit, ghCommit);
+            string url = pr == null ? ghCommit.HtmlUrl : pr.HtmlUrl;
+            ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
+            string cleanedLine = RemoveUndesiredTexts(firstLine);
+            table = table.WithRow($"[{cleanedLine}]({url})",
+                          $"{people.Author} / {string.Join(", ", people.Approvers.Values)}",
+                          string.Empty /* Comments */,
+                          string.Empty /* Validation status */);
+        }
+
+        return table;
+    }
+
+    public MarkdownTableBuilder GetSkippedTable(List<(PullRequestCommit, string)> skipped)
+    {
+        MarkdownTableBuilder table = new MarkdownTableBuilder()
+            .WithHeader("Reason", "Title");
+
+        foreach ((PullRequestCommit prCommit, string reason) in skipped)
+        {
+            ReadOnlySpan<char> line = GetFirstLine(prCommit.Commit.Message);
+            ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
+            string cleanedLine = RemoveUndesiredTexts(firstLine);
+            table = table.WithRow(reason, $"{cleanedLine}");
+        }
+
+        return table;
+    }
+
     public (PullRequest?, AuthorAndApprovers) GetPullRequestAuthorAndApprovers(PullRequestCommit prCommit, GitHubCommit gcCommit)
     {
         AuthorAndApprovers people = new(gcCommit.Commit.Author.Name);
@@ -142,7 +182,7 @@ public partial class CommitCollector
             matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(gcCommit.Commit.Message);
             if (!matchPrNumberInCommitTitle.Success)
             {
-                _errors.Add($"{gcCommit.Sha[..8]} - {firstLine} - No PR number found in the commit title.");
+                Errors.Add($"{gcCommit.Sha[..8]} - {firstLine} - No PR number found in the commit title.");
                 return (null, people);
             }
         }
@@ -160,7 +200,7 @@ public partial class CommitCollector
             Match matchOriginalPrNumberInBackportBody = MarkdownPrNumberRegex().Match(pr.Body);
             if (!matchOriginalPrNumberInBackportBody.Success)
             {
-                _errors.Add($"{gcCommit.Commit.Sha[..8]} - {firstLine} - Did not find 'Backport of' text in PR body.");
+                Errors.Add($"{gcCommit.Commit.Sha[..8]} - {firstLine} - Did not find 'Backport of' text in PR body.");
                 return (pr, people);
             }
 
@@ -177,7 +217,7 @@ public partial class CommitCollector
                 Match matchfirstPrLink = MarkdownPrNumberRegex().Match(actualPr.Body);
                 if (!matchfirstPrLink.Success)
                 {
-                    _errors.Add($"{gcCommit.Commit.Sha[..8]} - {firstLine} - Could not find a link to the second backport PR.");
+                    Errors.Add($"{gcCommit.Commit.Sha[..8]} - {firstLine} - Could not find a link to the second backport PR.");
                     return (actualPr, people);
                 }
 
@@ -194,21 +234,8 @@ public partial class CommitCollector
         return (pr, people);
     }
 
-    private void PrintIncludedTable(List<(PullRequestCommit, GitHubCommit)> included)
+    private void PrintIncludedTable(MarkdownTableBuilder table)
     {
-        var table = new MarkdownTableBuilder().WithHeader("PR", "Author/Approvers", "Comments", "Validation status");
-        foreach ((PullRequestCommit prCommit, GitHubCommit ghCommit) in included)
-        {
-            (PullRequest? pr, AuthorAndApprovers people) = GetPullRequestAuthorAndApprovers(prCommit, ghCommit);
-            string url = pr == null ? ghCommit.HtmlUrl : pr.HtmlUrl;
-            ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
-            string cleanedLine = RemoveUndesiredTexts(firstLine);
-            table = table.WithRow($"[{cleanedLine}]({url})",
-                          $"{people.Author} / {string.Join(", ", people.Approvers.Values)}",
-                          string.Empty /* Comments */,
-                          string.Empty /* Validation status */);
-        }
-
         ConsoleLog.WriteWarning("-----");
         Console.WriteLine();
         ConsoleLog.WriteSuccess(table.ToString());
@@ -217,17 +244,8 @@ public partial class CommitCollector
         Console.WriteLine();
     }
 
-    private void PrintSkippedTable(List<(PullRequestCommit, string)> skipped)
+    private void PrintSkippedTable(MarkdownTableBuilder table)
     {
-        var table = new MarkdownTableBuilder().WithHeader("Reason", "Title");
-        foreach ((PullRequestCommit prCommit, string reason) in skipped)
-        {
-            ReadOnlySpan<char> line = GetFirstLine(prCommit.Commit.Message);
-            ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
-            string cleanedLine = RemoveUndesiredTexts(firstLine);
-            table = table.WithRow(reason, $"{cleanedLine}");
-        }
-
         ConsoleLog.WriteWarning("Commits that were skipped:");
         ConsoleLog.WriteWarning(table.ToString());
 
@@ -238,10 +256,10 @@ public partial class CommitCollector
 
     private void PrintErrors()
     {
-        if (_errors.Any())
+        if (Errors.Any())
         {
             ConsoleLog.WriteError("People loading errors:");
-            foreach (string error in _errors)
+            foreach (string error in Errors)
             {
                 ConsoleLog.WriteError(error);
             }
@@ -254,7 +272,7 @@ public partial class CommitCollector
 
         if (pr == null)
         {
-            _errors.Add($"Could not retrieve PR for pr number {prNumber}.");
+            Errors.Add($"Could not retrieve PR for pr number {prNumber}.");
         }
 
         return pr != null;

@@ -2,6 +2,7 @@
 using System;
 using System.CommandLine;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -15,7 +16,7 @@ public static class Program
 
 
         Option<FileInfo> optionConfig = new(["-config", "-c"], () => new FileInfo(CommitCollector.DefaultConfigJsonFilePath), $"The GitHub configuration file to use. If the default file is not found in {CommitCollector.DefaultConfigJsonFilePath}, you'll be prompted to specify a path. The json file must have this format:{Environment.NewLine}{CommitCollector.SerializedGitHubOptions.Value}{Environment.NewLine}");
-        Option<int> optionPr = new("-pr", "The PR number to collect commits from.")
+        Option<string> optionPr = new("-pr", "The PR url or PR number to collect commits from.")
         {
             IsRequired = true
         };
@@ -31,12 +32,6 @@ public static class Program
 
         rootCommand.SetHandler(async (pr, org, repo, debug, config) =>
         {
-            ConsoleLog.WriteInfo($"Pull Request number: {pr}");
-            ConsoleLog.WriteInfo($"Org: {org}");
-            ConsoleLog.WriteInfo($"Repo: {repo}");
-            ConsoleLog.WriteInfo($"Config file: {config}");
-            ConsoleLog.WriteInfo($"Debug: {debug}");
-
             if (debug)
             {
                 while (!System.Diagnostics.Debugger.IsAttached)
@@ -48,8 +43,22 @@ public static class Program
                 System.Diagnostics.Debugger.Break();
             }
 
+            Match match = Regex.Match(pr, $@"((https://)?github.com/{org}/{repo}/pull/)?(?'prNumber'\d+)");
+            if (!match.Success)
+            {
+                throw new InvalidOperationException($"The PR is not a valid URL or a valid PR number: {pr}");
+            }
+
+            int prNumber = int.Parse(match.Groups["prNumber"].Value);
+
+            ConsoleLog.WriteInfo($"Pull Request number: {prNumber}");
+            ConsoleLog.WriteInfo($"Org: {org}");
+            ConsoleLog.WriteInfo($"Repo: {repo}");
+            ConsoleLog.WriteInfo($"Config file: {config}");
+            ConsoleLog.WriteInfo($"Debug: {debug}");
+
             CommitCollector collector = await CommitCollector.CreateAsync(config.FullName, org, repo);
-            collector.Run(pr);
+            collector.Run(prNumber);
 
         },
         optionPr, optionOrg, optionRepo, optionDebug, optionConfig);

@@ -66,10 +66,23 @@ public class CommitCollectorTests
         Commit_IncludeAsync(_prCommits111376, sha: "7db9d7b35e867fa310a618a7e413591839458722", originalTitle: "[Release/8.0] Fix FP state restore on macOS exception forwarding (#109579)", formattedTitle: "[Fix FP state restore on macOS exception forwarding](https://github.com/dotnet/runtime/pull/109579)", authors: "Jan Vorlicek / Jeff Schwartz, Vladimir Sadov");
 
     [Fact]
-    public Task Commit_Include_ExcludeNonReviewers() =>
+    public Task Commit_Include_ExcludeNonReviewers_AddOriginalPRReviewers() =>
         // Commit for a PR that has 5 reviewers but only 2 signed off
+        // But also the original PR had reviewers that signed off, those get added
         // https://github.com/dotnet/runtime/pull/111376/commits/eda4c706539eed06c4314e912dd0697433cf183e
-        Commit_IncludeAsync(_prCommits111376, sha: "eda4c706539eed06c4314e912dd0697433cf183e", originalTitle: "Support step into a tail call (#110440)", formattedTitle: "[Support step into a tail call](https://github.com/dotnet/runtime/pull/110440)", authors: "Thays Grazia / Jeff Schwartz, Tom McDonald");
+        Commit_IncludeAsync(_prCommits111376, sha: "eda4c706539eed06c4314e912dd0697433cf183e", originalTitle: "Support step into a tail call (#110440)", formattedTitle: "[Support step into a tail call](https://github.com/dotnet/runtime/pull/110440)", authors: "Thays Grazia / Jeff Schwartz, Mike McLaughlin, Tom McDonald");
+
+    [Fact]
+    public Task Commit_Include_PrAuthorIsNotBot() =>
+        // Commit for a PR that was manually created by a person instead of the bot, so the PR author is shown as author
+        // https://github.com/dotnet/runtime/pull/111376/commits/0ded51b53aa948691e4337607ddbc325db47bccc
+        Commit_IncludeAsync(_prCommits111376, sha: "0ded51b53aa948691e4337607ddbc325db47bccc", originalTitle: "Fix race condition when cancelling pending HTTP connection attempts (#110765)", formattedTitle: "[Fix race condition when cancelling pending HTTP connection attempts](https://github.com/dotnet/runtime/pull/110765)", authors: "Miha Zupan / Anton Firszov");
+
+    [Fact]
+    public Task Commit_Include_FindPRNumberDirectlyFromMergedCommit() =>
+        // Commit for a PR that had its commit message modified so it does not contain any PR links, so the PR number needs to be retrieved using the GitHub API
+        // https://github.com/dotnet/runtime/pull/111376/commits/177d80c25ac68e701d27bb4339c6c47afba88dd8
+        Commit_IncludeAsync(_prCommits111376, sha: "177d80c25ac68e701d27bb4339c6c47afba88dd8", originalTitle: "[release/8.0-staging] Fix erroneous success in AsnDecoder.ReadSequence", formattedTitle: "[Fix erroneous success in AsnDecoder.ReadSequence](https://github.com/dotnet/runtime/pull/109596)", authors: "Jeremy Barton / Kevin Jones");
 
     #endregion
 
@@ -81,9 +94,6 @@ public class CommitCollectorTests
         // Commit for a PR that contains only one test file under src/libraries/*/tests/*
         // https://github.com/dotnet/runtime/pull/111378/commits/bbd71321eb6286d1297ebc3c67a0abd3a1da29ac
         await Commit_Skip_AllTestFiles(_prCommits111378, sha: "bbd71321eb6286d1297ebc3c67a0abd3a1da29ac");
-        // Commit for a PR that contains only a csproj
-        // https://github.com/dotnet/runtime/pull/111376/commits/1a0aa3bba0c2681b6084f921560311010f5ccf2c
-        await Commit_Skip_AllTestFiles(_prCommits111376, sha: "1a0aa3bba0c2681b6084f921560311010f5ccf2c");
     }
 
     [Fact]
@@ -114,6 +124,12 @@ public class CommitCollectorTests
         // https://github.com/dotnet/runtime/pull/111378/commits/f58036422045bc89fa2e70536be5a857614cfee8
         Commit_Skip_AllInfraFiles(_prCommits111378, sha: "f58036422045bc89fa2e70536be5a857614cfee8");
 
+    [Fact]
+    public Task Commit_Skip_AllInfraFiles_CsProjFile() =>
+        // Commit for a PR that contains only a csproj file
+        // https://github.com/dotnet/runtime/pull/111376/commits/1a0aa3bba0c2681b6084f921560311010f5ccf2c
+        Commit_Skip_AllInfraFiles(_prCommits111376, sha: "1a0aa3bba0c2681b6084f921560311010f5ccf2c");
+
     #endregion
 
     #region Internal helpers
@@ -136,7 +152,7 @@ public class CommitCollectorTests
             Assert.Contains(title, prCommit.Commit.Message);
         }
 
-        List<(PullRequestCommit, GitHubCommit)> included = new();
+        List<PullRequestInformation> included = new();
         List<(PullRequestCommit, string)> skipped = new();
         _collector.Value.ProcessPullRequestCommit(prCommit, included, skipped);
         Assert.Empty(included);
@@ -156,15 +172,15 @@ public class CommitCollectorTests
 
         Assert.Contains(originalTitle, prCommit.Commit.Message);
 
-        List<(PullRequestCommit, GitHubCommit)> included = new();
+        List<PullRequestInformation> included = new();
         List<(PullRequestCommit, string)> skipped = new();
         _collector.Value.ProcessPullRequestCommit(prCommit, included, skipped);
         Assert.Single(included);
         Assert.Empty(skipped);
         Assert.Empty(_collector.Value.Errors);
 
-        (PullRequestCommit includedPRCommit, GitHubCommit includedGitHubCommit) = included.First();
-        Assert.Equal(sha, includedPRCommit.Sha);
+        PullRequestInformation info = included.First();
+        Assert.Equal(sha, info.PRCommit.Sha);
 
         string[] table = _collector.Value.GetIncludedTable(included).ToString().Split(Environment.NewLine, StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
 

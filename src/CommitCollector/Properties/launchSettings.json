@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "CommitCollector": {
+      "commandName": "Project",
+      "commandLineArgs": "-o dotnet -r runtime -pr https://github.com/dotnet/runtime/pull/111376",
+      "workingDirectory": "C:\\Users\\calope\\source\\repos\\infrastructure-tools\\src\\CommitCollector\\bin\\Debug\\net9.0"
+    }
+  }
+}

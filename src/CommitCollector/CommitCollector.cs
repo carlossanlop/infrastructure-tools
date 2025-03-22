@@ -1,21 +1,23 @@
-using InfrastructureTools.Shared;
 using InfrastructureTools.Connectors.GitHub;
-using Octokit;
 using InfrastructureTools.MarkdownTable;
-using System.Text.RegularExpressions;
-using System.Diagnostics.CodeAnalysis;
-using System.Threading.Tasks;
-using System.IO;
+using InfrastructureTools.Shared;
+using Octokit;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
+using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices.Marshalling;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+using System.Xml.Linq;
 
 namespace InfrastructureTools.CommitCollector;
 
 public partial class CommitCollector
 {
-
     public static readonly string DefaultConfigJsonFileName = "infrastructure-tools-settings.json";
     public static string DefaultConfigJsonFilePath = Path.Join(Path.GetTempPath(), DefaultConfigJsonFileName);
     internal static readonly string UserNameGitHubActionsBot = "github-actions[bot]";
@@ -105,22 +107,21 @@ public partial class CommitCollector
     {
         IReadOnlyList<PullRequestCommit> prCommits = Client.PullRequest.Commits(_org, _repo, prNumber).Result;
 
-        List<(PullRequestCommit, GitHubCommit)> included = new();
+        List<PullRequestInformation> prInfos = new();
         List<(PullRequestCommit, string)> skipped = new();
 
         foreach (PullRequestCommit prCommit in prCommits)
         {
-            ProcessPullRequestCommit(prCommit, included, skipped);
+            ProcessPullRequestCommit(prCommit, prInfos, skipped);
         }
 
-        MarkdownTableBuilder includedTable = GetIncludedTable(included);
-        PrintIncludedTable(includedTable);
-        MarkdownTableBuilder skippedTable = GetSkippedTable(skipped);
-        PrintSkippedTable(skippedTable);
+        PrintIncludedTable(prInfos);
+        PrintSkippedTable(skipped);
+        PrintAliases(prInfos);
         PrintErrors();
     }
 
-    public void ProcessPullRequestCommit(PullRequestCommit prCommit, List<(PullRequestCommit, GitHubCommit)> included, List<(PullRequestCommit, string)> skipped)
+    public void ProcessPullRequestCommit(PullRequestCommit prCommit, List<PullRequestInformation> prInfos, List<(PullRequestCommit, string)> skipped)
     {
         GitHubCommit ghCommit = Client.Repository.Commit.Get(_org, _repo, prCommit.Sha).Result;
         if (IsSkippable(prCommit, ghCommit, out string? reason))
@@ -129,23 +130,25 @@ public partial class CommitCollector
         }
         else
         {
-            included.Add((prCommit, ghCommit));
+            (PullRequest? pr, PullRequestPeople people) = GetPullRequestAuthorAndApprovers(prCommit, ghCommit);
+            prInfos.Add(new PullRequestInformation(prCommit, ghCommit, pr, people));
         }
     }
 
-    public MarkdownTableBuilder GetIncludedTable(List<(PullRequestCommit, GitHubCommit)> included)
+    public MarkdownTableBuilder GetIncludedTable(List<PullRequestInformation> prInfos)
     {
         MarkdownTableBuilder table = new MarkdownTableBuilder()
             .WithHeader("PR", "Author/Approvers", "Comments", "Validation status");
 
-        foreach ((PullRequestCommit prCommit, GitHubCommit ghCommit) in included)
+        foreach (PullRequestInformation info in prInfos)
         {
-            (PullRequest? pr, AuthorAndApprovers people) = GetPullRequestAuthorAndApprovers(prCommit, ghCommit);
-            string url = pr == null ? ghCommit.HtmlUrl : pr.HtmlUrl;
-            ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
+            string url = info.PR == null ? info.GHCommit.HtmlUrl : info.PR.HtmlUrl;
+            string firstLine = GetFirstLine(info.PRCommit.Commit.Message);
             string cleanedLine = RemoveUndesiredTexts(firstLine);
+            // Sort them by full name, which is the dict value
+            string approvers = string.Join(", ", info.People.Approvers.Values.Order());
             table = table.WithRow($"[{cleanedLine}]({url})",
-                          $"{people.Author} / {string.Join(", ", people.Approvers.Values)}",
+                          $"{info.People.Author} / {approvers}",
                           string.Empty /* Comments */,
                           string.Empty /* Validation status */);
         }
@@ -160,8 +163,8 @@ public partial class CommitCollector
 
         foreach ((PullRequestCommit prCommit, string reason) in skipped)
         {
-            ReadOnlySpan<char> line = GetFirstLine(prCommit.Commit.Message);
-            ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
+            string line = GetFirstLine(prCommit.Commit.Message);
+            string firstLine = GetFirstLine(prCommit.Commit.Message);
             string cleanedLine = RemoveUndesiredTexts(firstLine);
             table = table.WithRow(reason, $"{cleanedLine}");
         }
@@ -169,39 +172,72 @@ public partial class CommitCollector
         return table;
     }
 
-    public (PullRequest?, AuthorAndApprovers) GetPullRequestAuthorAndApprovers(PullRequestCommit prCommit, GitHubCommit gcCommit)
+    private bool TryGetPullRequestNumberUsingPullRequestCommit(PullRequestCommit prCommit, string firstLine, out int initialPrNumber)
     {
-        AuthorAndApprovers people = new(gcCommit.Commit.Author.Name);
-
-        ReadOnlySpan<char> firstLine = GetFirstLine(prCommit.Commit.Message);
-        Match matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(prCommit.Commit.Message);
-        int initialPrNumber;
-        if (!matchPrNumberInCommitTitle.Success)
+        IReadOnlyList<CommitPullRequest> pullRequests = Client.Repository.Commit.PullRequests(_org, _repo, prCommit.Sha).Result;
+        if (pullRequests.Any())
         {
-            // Just in case, try find a prNumber in the full body
-            matchPrNumberInCommitTitle = MarkdownPrNumberRegex().Match(gcCommit.Commit.Message);
-            if (!matchPrNumberInCommitTitle.Success)
+            CommitPullRequest? commitPullRequest = pullRequests.FirstOrDefault(p => p.Title.Contains(firstLine));
+            if (commitPullRequest != null)
             {
-                Errors.Add($"{gcCommit.Sha[..8]} - {firstLine} - No PR number found in the commit title.");
-                return (null, people);
+                initialPrNumber = commitPullRequest.Number;
+                return true;
             }
         }
 
-        initialPrNumber = int.Parse(matchPrNumberInCommitTitle.Groups["prNumber"].Value);
-        if (!TryGetPR(initialPrNumber, out PullRequest? pr))
+        initialPrNumber = -1;
+        return false;
+    }
+
+    private bool TryGetPullRequestNumberFromCommitMessage(PullRequestCommit prCommit, GitHubCommit gcCommit, string firstLine, out int initialPrNumber)
+    {
+        Match matchPrNumberInPullRequestCommitTitle = MarkdownPrNumberRegex().Match(prCommit.Commit.Message);
+
+        if (matchPrNumberInPullRequestCommitTitle.Success)
+        {
+            initialPrNumber = int.Parse(matchPrNumberInPullRequestCommitTitle.Groups["prNumber"].Value);
+            return true;
+        }
+
+        Match matchPrNumberInGitHubCommitTitle = MarkdownPrNumberRegex().Match(gcCommit.Commit.Message);
+        if (matchPrNumberInGitHubCommitTitle.Success)
+        {
+            initialPrNumber = int.Parse(matchPrNumberInPullRequestCommitTitle.Groups["prNumber"].Value);
+            return true;
+        }
+
+        Errors.Add($"{gcCommit.Sha[..7]} - {firstLine} - No PR number found in the commit title.");
+        initialPrNumber = -1;
+        return false;
+
+    }
+
+    public (PullRequest?, PullRequestPeople) GetPullRequestAuthorAndApprovers(PullRequestCommit prCommit, GitHubCommit ghCommit)
+    {
+        PullRequestPeople people = new(ghCommit.Commit.Author.Name);
+        string firstLine = GetFirstLine(prCommit.Commit.Message);
+
+        if ((!TryGetPullRequestNumberUsingPullRequestCommit(prCommit, firstLine, out int initialPrNumber) &&
+             !TryGetPullRequestNumberFromCommitMessage(prCommit, ghCommit, firstLine, out initialPrNumber)) ||
+            !TryGetPR(initialPrNumber, out PullRequest? pr))
         {
             return (null, people);
         }
+
         AddPeople(people, pr);
 
         if (people.Author == UserNameGitHubActionsBot)
         {
             // The initial PR is a backport PR
-            Match matchOriginalPrNumberInBackportBody = MarkdownPrNumberRegex().Match(pr.Body);
+            Match matchOriginalPrNumberInBackportBody = MarkdownBackportOfPrNumberRegex().Match(pr.Body);
             if (!matchOriginalPrNumberInBackportBody.Success)
             {
-                Errors.Add($"{gcCommit.Commit.Sha[..8]} - {firstLine} - Did not find 'Backport of' text in PR body.");
-                return (pr, people);
+                matchOriginalPrNumberInBackportBody = MarkdownPrNumberRegex().Match(pr.Body);
+                if (!matchOriginalPrNumberInBackportBody.Success)
+                {
+                    Errors.Add($"{ghCommit.Sha[..7]} - {firstLine} - Did not find 'Backport of' text in PR body.");
+                    return (pr, people);
+                }
             }
 
             int actualPrNumber = int.Parse(matchOriginalPrNumberInBackportBody.Groups["prNumber"].Value);
@@ -217,7 +253,7 @@ public partial class CommitCollector
                 Match matchfirstPrLink = MarkdownPrNumberRegex().Match(actualPr.Body);
                 if (!matchfirstPrLink.Success)
                 {
-                    Errors.Add($"{gcCommit.Commit.Sha[..8]} - {firstLine} - Could not find a link to the second backport PR.");
+                    Errors.Add($"{ghCommit.Commit.Sha[..7]} - {firstLine} - Could not find a link to the second backport PR.");
                     return (actualPr, people);
                 }
 
@@ -231,11 +267,14 @@ public partial class CommitCollector
             }
         }
 
+        Debug.Assert(people.Author != UserNameGitHubActionsBot);
         return (pr, people);
     }
 
-    private void PrintIncludedTable(MarkdownTableBuilder table)
+    private void PrintIncludedTable(List<PullRequestInformation> includedDatas)
     {
+        MarkdownTableBuilder table = GetIncludedTable(includedDatas);
+
         ConsoleLog.WriteWarning("-----");
         Console.WriteLine();
         ConsoleLog.WriteSuccess(table.ToString());
@@ -244,14 +283,44 @@ public partial class CommitCollector
         Console.WriteLine();
     }
 
-    private void PrintSkippedTable(MarkdownTableBuilder table)
+    private void PrintSkippedTable(List<(PullRequestCommit, string)> skipped)
     {
+        MarkdownTableBuilder table = GetSkippedTable(skipped);
+
         ConsoleLog.WriteWarning("Commits that were skipped:");
         ConsoleLog.WriteWarning(table.ToString());
 
         Console.WriteLine();
         ConsoleLog.WriteWarning("-----");
         Console.WriteLine();
+    }
+
+    private void PrintAliases(List<PullRequestInformation> prInfos)
+    {
+        SortedSet<string> approvers = new();
+        SortedSet<string> authors = new();
+
+        foreach (PullRequestInformation info in prInfos)
+        {
+            if (!authors.Contains(info.People.Author))
+            {
+                authors.Add(info.People.Author);
+            }
+            foreach (string name in info.People.Approvers.Values)
+            {
+                // Only add to the approvers line if it's not already among authors
+                if (!authors.Contains(name) && !approvers.Contains(name))
+                {
+                    approvers.Add(name);
+                }
+            }
+        }
+
+        Console.WriteLine("-----");
+        Console.WriteLine("Authors and approvers:");
+        ConsoleLog.WriteSuccess(string.Join(';', authors));
+        ConsoleLog.WriteSuccess(string.Join(';', approvers));
+        Console.WriteLine("-----");
     }
 
     private void PrintErrors()
@@ -278,33 +347,36 @@ public partial class CommitCollector
         return pr != null;
     }
 
-    private void AddPeople(AuthorAndApprovers people, PullRequest pr)
+    private void AddPeople(PullRequestPeople people, PullRequest pr)
     {
         if (pr.User.Login != UserNameGitHubActionsBot)
         {
             User creator = GetCachedUser(pr.User.Login);
-            people.Update(creator);
+            people.TryAddAuthor(creator);
         }
 
         if (pr.Assignee != null && pr.Assignee.Login != UserNameGitHubActionsBot)
         {
             User assignee = GetCachedUser(pr.Assignee.Login);
-            people.Update(assignee);
+            if (string.IsNullOrEmpty(people.Author))
+            {
+                people.TryAddAuthor(assignee);
+            }
+            else
+            {
+                people.TryAddApprover(assignee);
+            }
         }
 
-        foreach (string reviewerLogin in pr.RequestedReviewers.Where(r => r.Login != UserNameGitHubActionsBot && !people.Approvers.ContainsKey(r.Login)).Select(r => r.Login))
-        {
-            User reviewer = GetCachedUser(reviewerLogin);
-            people.Update(reviewer);
-        }
-
+        // Do not look among pr.RequestReviewers because that will return people who were asked
+        // to review but did not provide a review at all.
         IReadOnlyList<PullRequestReview> reviews = Client.PullRequest.Review.GetAll(_org, _repo, pr.Number).Result;
         foreach (PullRequestReview review in reviews)
         {
             if (review.State == PullRequestReviewState.Approved && !people.Approvers.ContainsKey(review.User.Login))
             {
                 User reviewer = GetCachedUser(review.User.Login);
-                people.Update(reviewer);
+                people.TryAddApprover(reviewer);
             }
         }
     }
@@ -325,7 +397,7 @@ public partial class CommitCollector
     {
         reason = null;
 
-        ReadOnlySpan<char> firstMessageLine = GetFirstLine(prCommit.Commit.Message);
+        string firstMessageLine = GetFirstLine(prCommit.Commit.Message);
 
         // If the author is the Maestro bot, then the commit is skippable
         if (ghCommit.Author.Login == UserNameMaestroBot)
@@ -388,7 +460,7 @@ public partial class CommitCollector
         return result;
     }
 
-    private ReadOnlySpan<char> GetFirstLine(string txt)
+    private string GetFirstLine(string txt)
     {
         int index = txt.IndexOfAny(NewLineChar);
         if (index == -1)
@@ -396,35 +468,12 @@ public partial class CommitCollector
             index = txt.Length;
         }
 
-        return txt.AsSpan(0, index);
+        return txt.Substring(0, index);
     }
+
+    [GeneratedRegex(@"Backport of #(?<prNumber>\d+)")]
+    private static partial Regex MarkdownBackportOfPrNumberRegex();
 
     [GeneratedRegex(@"\(\#(?<prNumber>\d+)\)")]
     private static partial Regex MarkdownPrNumberRegex();
-}
-
-public class AuthorAndApprovers
-{
-    public string Author { get; set; }
-    public Dictionary<string, string> Approvers { get; } // alias -> name
-    public AuthorAndApprovers(string commitCreator)
-    {
-        Author = commitCreator;
-        Approvers = new Dictionary<string, string>();
-    }
-    public void Update(User user)
-    {
-        string name = GetNameOrUserName(user);
-        if (Author == string.Empty || Author == CommitCollector.UserNameGitHubActionsBot)
-        {
-            Author = name;
-        }
-        if (Author != name && !Approvers.ContainsKey(user.Login))
-        {
-            // Only add this user to approvers if it is not the author
-            Approvers.Add(user.Login, name);
-        }
-    }
-    private string GetNameOrUserName(User user) => string.IsNullOrWhiteSpace(user.Name) ? user.Login : user.Name;
-
 }
